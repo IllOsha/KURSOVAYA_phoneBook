@@ -64,9 +64,9 @@ void mainwindow::refreshtable(){
         table -> setItem(i, 5, new QTableWidgetItem(QString::fromStdString(c.address)));
 
         QString phonesStr;
-               for (const auto& p : c.phones)
-                   phonesStr += QString::fromStdString(p.label + ": " + p.number + " ");
-               table->setItem(i, 6, new QTableWidgetItem(phonesStr.trimmed()));
+        for (const auto& p : c.phones)
+            phonesStr += QString::fromStdString(p.label + ": " + p.number + " ");
+        table->setItem(i, 6, new QTableWidgetItem(phonesStr.trimmed()));
     }
 }
 
@@ -77,7 +77,7 @@ void mainwindow::onadd() {
 
     s = QInputDialog::getText(this, "LASTNAME", "enter last name:", QLineEdit::Normal, "", &ok);
     if (!ok || s.isEmpty()) return;
-    c.lastname = s.toStdString();
+    c.lastname = Validators::normalize_name(s.toStdString()); // склеивание и чистка
     if (!Validators::validname(c.lastname)) {
         QMessageBox::warning(this, "error", "invalid last name format!");
         return;
@@ -85,7 +85,7 @@ void mainwindow::onadd() {
 
     s = QInputDialog::getText(this, "FIRSTNAME", "enter first name:", QLineEdit::Normal, "", &ok);
     if (!ok || s.isEmpty()) return;
-    c.firstname = s.toStdString();
+    c.firstname = Validators::normalize_name(s.toStdString()); // склеивание и чистка
     if (!Validators::validname(c.firstname)) {
         QMessageBox::warning(this, "error", "invalid first name format!");
         return;
@@ -93,7 +93,7 @@ void mainwindow::onadd() {
 
     s = QInputDialog::getText(this, "MIDDLENAME", "enter middle name:", QLineEdit::Normal, "", &ok);
     if (!ok) return;
-    c.middlename = s.toStdString();
+    c.middlename = Validators::normalize_name(s.toStdString()); // склеивание и чистка
     if (!c.middlename.empty() && !Validators::validname(c.middlename)) {
         QMessageBox::warning(this, "error", "invalid middle name format!");
         return;
@@ -101,7 +101,7 @@ void mainwindow::onadd() {
 
     s = QInputDialog::getText(this, "EMAIL", "enter email:", QLineEdit::Normal, "", &ok);
     if (!ok || s.isEmpty()) return;
-    c.email = s.toStdString();
+    c.email = Validators::trim(s.toStdString());
     if (!Validators::valiemail(c.email)) {
         QMessageBox::warning(this, "error", "invalid email format!");
         return;
@@ -109,7 +109,7 @@ void mainwindow::onadd() {
 
     s = QInputDialog::getText(this, "BIRTHDAY", "enter birthday (DD.MM.YYYY):", QLineEdit::Normal, "", &ok);
     if (!ok || s.isEmpty()) return;
-    c.birthday = s.toStdString();
+    c.birthday = Validators::trim(s.toStdString());
 
     QDate date = QDate::fromString(QString::fromStdString(c.birthday), "dd.MM.yyyy");
     if (!date.isValid() || date > QDate::currentDate()) {
@@ -119,28 +119,32 @@ void mainwindow::onadd() {
 
     s = QInputDialog::getText(this, "ADDRESS", "enter address:", QLineEdit::Normal, "", &ok);
     if (!ok || s.isEmpty()) return;
-    c.address = s.toStdString();
+    c.address = Validators::trim(s.toStdString());
 
     PhoneNumber p;
     s = QInputDialog::getText(this, "PHONE LABEL", "enter phone label (home/work/etc):", QLineEdit::Normal, "", &ok);
     if (!ok) return;
-    p.label = s.toStdString();
+    p.label = Validators::trim(s.toStdString());
 
     s = QInputDialog::getText(this, "PHONE NUMBER", "enter phone number (+7... or 8...):", QLineEdit::Normal, "", &ok);
     if (!ok || s.isEmpty()) return;
-    p.number = s.toStdString();
+    p.number = Validators::normalize_phone(s.toStdString());
+    if (!Validators::validphone(p.number)) {
+        QMessageBox::warning(this, "error", "invalid phone number format! (+7XXXXXXXXXX or 8XXXXXXXXXX)");
+        return;
+    }
 
     if (!Validators::validname(c.firstname) ||
-            !Validators::validname(c.lastname) ||
-            !Validators::valiemail(c.email) ||
-            !Validators::validbirthday(c.birthday))
-        {
-            QMessageBox::warning(this, "error","troubles((.\n" "lastname?, name?, email or BRTH.");
-            return;
-        }
+        !Validators::validname(c.lastname) ||
+        (!c.middlename.empty() && !Validators::validname(c.middlename)) ||
+        !Validators::valiemail(c.email) ||
+        !Validators::validbirthday(c.birthday))
+    {
+        QMessageBox::warning(this, "error", "troubles((.\nCheck lastname, firstname, middlename, email or birthday.");
+        return;
+    }
 
     c.phones.push_back(p);
-
     pb.addcontact(std::move(c));
     refreshtable();
     QMessageBox::information(this, "UCPEH", "contact added successfully!");
