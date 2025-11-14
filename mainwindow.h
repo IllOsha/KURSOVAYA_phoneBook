@@ -13,7 +13,6 @@ class mainwindow : public QMainWindow{
     Q_OBJECT;// ало макрос для включения метаобъектов, типо как сигнал для динамических свойств и бла бла чтобы класс наследовался от QOBJECT
 public:
     explicit mainwindow(QWidget *parent = nullptr); // explicit для неявных преобразований нужен, но вообще можно mainwindow w = nullptr, но как будто опасно будет, если будет не лень попробую
-// * parent - короче родитльский виджет, который будет управлять памятью дочернного, ну короче база, чтобы автоматом управлять памятью
 private slots:// ну слоты типо для обработки пользовательских действий
     void onadd();// ну тут понятно, кнопки добавляю
     void ondelete();
@@ -30,5 +29,9 @@ private:
     QPushButton * findBtn;
 
     void refreshtable(); // для обновления таблицы
-};
 
+    QString getValidName(const QString &title, bool allowEmpty = false);
+    QString getValidEmail(const QString &title);
+    QString getValidBirthday(const QString &title);
+    QString getValidAddress(const QString &title);
+};
