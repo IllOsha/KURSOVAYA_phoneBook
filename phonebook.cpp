@@ -29,7 +29,7 @@ bool phonebook::loadfromfile(const std::string& filename) {
     return true;
 }
 
-bool phonebook::savetofile(const std::string& filename) const {  // ← исправлено имя
+bool phonebook::savetofile(const std::string& filename) const { 
     std::ofstream out(filename, std::ios::trunc);
     if (!out) return false;
 
