@@ -14,6 +14,8 @@ public:
     std::vector<size_t> findbyname(const std::string &query) const;
     void listall() const;
 
+    const std::vector<contacts>& getAll() const { return contacts_; }
+
     size_t size() const { return contacts_.size(); }
     const contacts &at(size_t idx) const { return contacts_.at(idx); }
     contacts &at(size_t idx) { return contacts_.at(idx); }
