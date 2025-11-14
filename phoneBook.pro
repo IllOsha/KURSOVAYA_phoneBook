@@ -1,10 +1,11 @@
-#  ПРОЕКТ: Телефонный справочник 
-QT += core gui widgets
+#  ПРОЕКТ: Телефонный справочник
+QT += core gui widgets sql
 
 CONFIG += c++17
+TEMPLATE = app
 CONFIG -= app_bundle
 
-# макрос для Qt 
+# макрос для Qt
 DEFINES += USE_QT_GUI
 
 TEMPLATE = app
@@ -12,6 +13,7 @@ TARGET = phoneBook
 
 # тут исходники .cpp
 SOURCES += \
+    dbstorage.cpp \
     main.cpp \
     mainwindow.cpp \
     contacts.cpp \
@@ -21,6 +23,7 @@ SOURCES += \
 
 # .h - файлы все
 HEADERS += \
+    dbstorage.h \
     mainwindow.h \
     contacts.h \
     filestorage.h \
