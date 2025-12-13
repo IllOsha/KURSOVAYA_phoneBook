@@ -7,11 +7,64 @@
 #include <QTextStream>
 #include <QHeaderView>
 #include <QAbstractItemView>
-#include <QDialogButtonBox>
+#include <QStringList>
+#include <QSqlDatabase>
+#include <QSqlQuery>
+#include <QSqlError>
+#include <QDebug>
+
+
+// БОЖЕ СПАСИ МЕНЯ ОТ ПРОЬЛЕМ С ПОСТГРЕСОМ 
+static QSqlDatabase pgdb;
+
+static bool initPostgres(QWidget *parent) {
+    if (QSqlDatabase::contains("pg"))
+        pgdb = QSqlDatabase::database("pg");
+    else
+        pgdb = QSqlDatabase::addDatabase("QPSQL", "pg");
+
+    pgdb.setHostName("localhost");
+    pgdb.setPort(5432);
+    pgdb.setDatabaseName("phonebook");
+    pgdb.setUserName("postgres");
+    pgdb.setPassword("EfanoV0706");
+
+    if (!pgdb.open()) {
+        QMessageBox::warning(parent, "PostgreSQL",
+                             "PostgreSQL connection failed:\n" + pgdb.lastError().text());
+        return false;
+    }
+
+    QSqlQuery q(pgdb);
+
+    // contacts
+    q.exec(
+        "CREATE TABLE IF NOT EXISTS contacts ("
+        "id SERIAL PRIMARY KEY,"
+        "lastname TEXT,"
+        "firstname TEXT,"
+        "middlename TEXT,"
+        "birthday TEXT,"
+        "email TEXT,"
+        "address TEXT)"
+    );
+
+    // phones
+    q.exec(
+        "CREATE TABLE IF NOT EXISTS phones ("
+        "id SERIAL PRIMARY KEY,"
+        "contact_id INTEGER REFERENCES contacts(id) ON DELETE CASCADE,"
+        "label TEXT,"
+        "number TEXT)"
+    );
+
+    return true;
+}
+
 
 mainwindow::mainwindow(QWidget * parent) : QMainWindow(parent){
     setWindowTitle("phone alo");
-    resize(800, 500);
+    resize(1000, 600);
 
     QWidget * central = new QWidget(this);
     QBoxLayout * mainlayout = new QVBoxLayout(central);
@@ -20,8 +73,9 @@ mainwindow::mainwindow(QWidget * parent) : QMainWindow(parent){
     searchfield = new QLineEdit;
     searchfield->setPlaceholderText("enter text ");
     findBtn = new QPushButton("search");
-    QPushButton * resetBtn = new QPushButton("reset"); 
+    resetBtn = new QPushButton("reset");
     addBtn = new QPushButton("add");
+    editBtn = new QPushButton("edit");
     delBtn = new QPushButton("delete");
     saveBtn = new QPushButton("save");
 
@@ -29,6 +83,7 @@ mainwindow::mainwindow(QWidget * parent) : QMainWindow(parent){
     toplayout->addWidget(findBtn);
     toplayout->addWidget(resetBtn);
     toplayout->addWidget(addBtn);
+    toplayout->addWidget(editBtn);
     toplayout->addWidget(delBtn);
     toplayout->addWidget(saveBtn);
 
@@ -49,14 +104,49 @@ mainwindow::mainwindow(QWidget * parent) : QMainWindow(parent){
         setStyleSheet(styleFile.readAll());
 
     connect(addBtn, &QPushButton::clicked, this, &mainwindow::onadd);
+    connect(editBtn, &QPushButton::clicked, this, &mainwindow::onedit);
     connect(delBtn, &QPushButton::clicked, this, &mainwindow::ondelete);
     connect(findBtn, &QPushButton::clicked, this, &mainwindow::onfind);
+    connect(resetBtn, &QPushButton::clicked, this, &mainwindow::onreset);
     connect(saveBtn, &QPushButton::clicked, this, &mainwindow::onsave);
-    connect(resetBtn, &QPushButton::clicked, [this](){ refreshtable(); searchfield->clear(); }); // 🔹 кнопка Reset
 
     pb.loadfromfile("phonebook.db");
     refreshtable();
+
+    // постгресик ам ам ам я не понимаю
+    if (initPostgres(this)) {
+        QSqlQuery q(pgdb);
+        q.exec("SELECT * FROM contacts ORDER BY id");
+
+        while (q.next()) {
+            contacts c;
+            int cid = q.value("id").toInt();
+
+            c.lastname   = q.value("lastname").toString().toStdString();
+            c.firstname  = q.value("firstname").toString().toStdString();
+            c.middlename = q.value("middlename").toString().toStdString();
+            c.birthday   = q.value("birthday").toString().toStdString();
+            c.email      = q.value("email").toString().toStdString();
+            c.address    = q.value("address").toString().toStdString();
+
+            QSqlQuery qp(pgdb);
+            qp.prepare("SELECT label, number FROM phones WHERE contact_id = :id");
+            qp.bindValue(":id", cid);
+            qp.exec();
+
+            while (qp.next()) {
+                PhoneNumber p;
+                p.label  = qp.value(0).toString().toStdString();
+                p.number = qp.value(1).toString().toStdString();
+                c.phones.push_back(p);
+            }
+            pb.addcontact(std::move(c));
+        }
+    }
+
+    refreshtable();
 }
+
 
 void mainwindow::refreshtable(){
     table->setRowCount(static_cast<int>(pb.size()));
@@ -72,162 +162,272 @@ void mainwindow::refreshtable(){
 
         QString phonesStr;
         for (const auto& p : c.phones)
-            phonesStr += QString::fromStdString(p.label + ": " + p.number + " ");
+            phonesStr += QString::fromStdString(p.label + ": " + p.number + " ; ");
         table->setItem(i, 6, new QTableWidgetItem(phonesStr.trimmed()));
-
-        table->setRowHidden(i, false); // на случай, если поиск скрывал строки
     }
 }
 
-void showError(const QString &message) {
-    QMessageBox msg;
-    msg.setIcon(QMessageBox::Critical);
-    msg.setWindowTitle("Error");
-    msg.setText("<span style='color:black; font-size:13px;'>" + message + "</span>");
+// ошибки 
+static void showErrorMsg(QWidget *parent, const QString &message) {
+    QMessageBox msg(parent);
+    msg.setIcon(QMessageBox::Warning);
+    msg.setWindowTitle("Validation errors");
+    msg.setText("<span style='color:black;'>" + message.toHtmlEscaped() + "</span>");
     msg.exec();
 }
 
-static QString getInputWithBlackPlaceholder(QWidget *parent, const QString &title, const QString &placeholder) {
-    QDialog dialog(parent);
-    dialog.setWindowTitle(title);
-    dialog.setModal(true);
-
-    QVBoxLayout layout(&dialog);
-    QLabel label("Enter " + title.toLower() + ":");
-    layout.addWidget(&label);
-
-    // Поле ввода с белым текстом и чёрным placeholder
-    QLineEdit lineEdit;
-    lineEdit.setPlaceholderText(placeholder);
-    lineEdit.setStyleSheet(
-        "QLineEdit { color: white; }"              // текст, который вводит пользователь — белый
-        "QLineEdit::placeholder { color: black; }" // подсказка (placeholder) — чёрная
-    );
-    layout.addWidget(&lineEdit);
-
-    QDialogButtonBox buttons(QDialogButtonBox::Ok | QDialogButtonBox::Cancel);
-    layout.addWidget(&buttons);
-
-    QObject::connect(&buttons, &QDialogButtonBox::accepted, &dialog, &QDialog::accept);
-    QObject::connect(&buttons, &QDialogButtonBox::rejected, &dialog, &QDialog::reject);
-
-    if (dialog.exec() == QDialog::Accepted)
-        return lineEdit.text();
-    return "";
-}
-QString mainwindow::getValidName(const QString &title, bool allowEmpty){
+// еще еще ещеще ещеще еще щещ ещ корретктный ввод 
+QString mainwindow::getValidName(const QString &title, bool allowEmpty, const QString &defaultText){
     while (true){
-        QString s = getInputWithBlackPlaceholder(this, title, "Enter " + title.toLower());
-        if (s.isEmpty()) return "";
+        bool ok;
+        QString prompt = "Enter " + title.toLower() + ":";
+        QString s = QInputDialog::getText(this, title, prompt, QLineEdit::Normal, defaultText, &ok);
+        if (!ok) return QString(); // отмена
+        s = s.trimmed();
 
-        s = s.simplified();
-        s = s.remove(QRegularExpression("\\d")); // убираем цифры
+        // нормализация: склеивание одиночных букв, удаляем лишние пробелы вокруг дефиса
+        std::string norm = Validators::normalize_name(s.toStdString());
+        QString qs = QString::fromStdString(norm);
 
-        QStringList parts = s.split(QRegularExpression("\\s+"), QString::SkipEmptyParts);
-        QString result;
-        for (const auto &p : parts)
-            result += p;
-        s = result;
+        if (qs.isEmpty() && allowEmpty) return QString();
+        if (!qs.isEmpty() && Validators::validname(qs.toStdString())) return qs;
 
-        if (s.isEmpty() && allowEmpty) return "";
-        if (!s.isEmpty() && Validators::validname(s.toStdString())) return s;
-
-        showError("Invalid " + title.toLower() + "! Only letters and hyphens allowed, must start with a letter.");
+        showErrorMsg(this, QString("Invalid %1! Only letters, digits, hyphen and spaces allowed. Must start with a letter and not start/end with hyphen.").arg(title.toLower()));
     }
 }
 
-QString mainwindow::getValidEmail(const QString &title){
+QString mainwindow::getValidEmail(const QString &title, const QString &defaultText){
     while (true){
-        QString s = getInputWithBlackPlaceholder(this, title, "Enter email");
-        if (s.isEmpty()) return "";
-
+        bool ok;
+        QString s = QInputDialog::getText(this, title, "Enter " + title.toLower() + ":", QLineEdit::Normal, defaultText, &ok);
+        if (!ok) return QString();
         s = s.trimmed();
-        s.replace(QRegularExpression("\\s*@\\s*"), "@");
+        s.replace(QRegExp("\\s*@\\s*"), "@");
 
         if (!s.isEmpty() && Validators::valiemail(s.toStdString())) return s;
 
-        showError("Invalid email! Must be valid format (example@mail.ru).");
+        showErrorMsg(this, "invalid email! Must be ASCII letters/digits in user and domain (e.g. example@mail.com).");
     }
 }
 
-QString mainwindow::getValidBirthday(const QString &title){
+QString mainwindow::getValidBirthday(const QString &title, const QString &defaultText){
     while (true){
-        QString s = getInputWithBlackPlaceholder(this, title, "Enter birthday (DD.MM.YYYY)");
-        if (s.isEmpty()) return "";
-
+        bool ok;
+        QString s = QInputDialog::getText(this, title, "Enter birthday (DD.MM.YYYY):", QLineEdit::Normal, defaultText, &ok);
+        if (!ok) return QString();
         s = s.trimmed();
         if (!s.isEmpty() && Validators::validbirthday(s.toStdString())) return s;
-
-        showError("Invalid birthday! Format DD.MM.YYYY and must be before today.");
+        showErrorMsg(this, "invalid birthday! Format DD.MM.YYYY and must be before today.");
     }
 }
 
-QString mainwindow::getValidAddress(const QString &title){
+QString mainwindow::getValidAddress(const QString &title, const QString &defaultText){
     while (true){
-        QString s = getInputWithBlackPlaceholder(this, title, "Enter address");
-        if (s.isEmpty()) return "";
-
+        bool ok;
+        QString s = QInputDialog::getText(this, title, "Enter address:", QLineEdit::Normal, defaultText, &ok);
+        if (!ok) return QString();
         s = s.trimmed();
         if (!s.isEmpty() && Validators::validaddress(s.toStdString())) return s;
-
-        showError("Address cannot be empty!");
+        showErrorMsg(this, "Address cannot be empty!");
     }
 }
 
 void mainwindow::onadd() {
     contacts c;
 
-    c.lastname = getValidName("LASTNAME").toStdString();
-    if (c.lastname.empty()) return;
+    QString lname = getValidName("LASTNAME", false);
+    if (lname.isEmpty()) return;
+    c.lastname = lname.toStdString();
 
-    c.firstname = getValidName("FIRSTNAME").toStdString();
-    if (c.firstname.empty()) return;
+    QString fname = getValidName("FIRSTNAME", false);
+    if (fname.isEmpty()) return;
+    c.firstname = fname.toStdString();
 
-    c.middlename = getValidName("MIDDLENAME", true).toStdString();
+    QString mname = getValidName("MIDDLENAME", true);
+    if (mname.isEmpty()) c.middlename = "";
+    else c.middlename = mname.toStdString();
 
-    c.email = getValidEmail("EMAIL").toStdString();
-    if (c.email.empty()) return;
+    QString email = getValidEmail("EMAIL");
+    if (email.isEmpty()) return;
+    c.email = email.toStdString();
 
-    c.birthday = getValidBirthday("BIRTHDAY").toStdString();
-    if (c.birthday.empty()) return;
+    QString bday = getValidBirthday("BIRTHDAY");
+    if (bday.isEmpty()) return;
+    c.birthday = bday.toStdString();
 
-    c.address = getValidAddress("ADDRESS").toStdString();
-    if (c.address.empty()) return;
+    QString addr = getValidAddress("ADDRESS");
+    if (addr.isEmpty()) return;
+    c.address = addr.toStdString();
 
-    // PHONE
-    PhoneNumber p;
-    bool okLabel = true;
-    while (okLabel) {
-        QString label = getInputWithBlackPlaceholder(this, "PHONE LABEL", "Enter phone label (home/work/etc)");
-        if (label.isEmpty()) break;
+    // типо плюс один номер йоу фишка я уникален 
+    QVector<PhoneNumber> phonesLocal;
+    while (true) {
+        bool ok;
+        QString label = QInputDialog::getText(this, "PHONE LABEL", "Enter phone label (home/work/etc):", QLineEdit::Normal, "", &ok);
+        if (!ok) break; // отмена добавления телефонов если нет ни одного номера в итоге — ошибка
         label = label.trimmed();
+        if (label.isEmpty()) continue;
 
-        while (true) {
-            QString number = getInputWithBlackPlaceholder(this, "PHONE NUMBER", "Enter phone number (+7... or 8...)");
-            if (number.isEmpty()) { okLabel = false; break; }
-            number = QString::fromStdString(Validators::normalize_phone(number.toStdString()));
-            if (!Validators::validphone(number.toStdString())) {
-                showError("Invalid phone number! Must start with +7 or 8 followed by 10 digits.");
-                continue;
-            }
+        QString number = QInputDialog::getText(this, "PHONE NUMBER", "Enter phone number (+7... or 8...):", QLineEdit::Normal, "", &ok);
+        if (!ok) break; // отмена
+        number = number.trimmed();
+        number = QString::fromStdString(Validators::normalize_phone(number.toStdString()));
 
-            p.label = label.toStdString();
-            p.number = number.toStdString();
-            break;
+        if (!Validators::validphone(number.toStdString())) {
+            showErrorMsg(this, "invalid phone number! Must start with +7 or 8 followed by 10 digits.");
+            continue;
         }
-        break;
+
+        PhoneNumber p;
+        p.label = label.toStdString();
+        p.number = number.toStdString();
+        phonesLocal.push_back(p);
+
+        //добавить ещё?
+        QMessageBox addMore;
+        addMore.setWindowTitle("More phones?");
+        addMore.setText("Add another phone?");
+        addMore.setStandardButtons(QMessageBox::Yes | QMessageBox::No);
+        if (addMore.exec() == QMessageBox::No) break;
     }
 
-    if (!p.number.empty()) c.phones.push_back(p);
+    if (phonesLocal.empty()) {
+        showErrorMsg(this, "At least one phone number is required.");
+        return;
+    }
+
+    for (auto &ph : phonesLocal) c.phones.push_back(ph);
+
     pb.addcontact(std::move(c));
     refreshtable();
     QMessageBox::information(this, "Success", "Contact added successfully!");
 }
 
+void mainwindow::onedit() {
+    int row = table->currentRow();
+    if (row < 0) { showErrorMsg(this, "Please select a contact to edit."); return; }
+
+    contacts &orig = pb.at(static_cast<size_t>(row));
+    contacts tmp = orig;
+
+    QString lname = getValidName("LASTNAME", false, QString::fromStdString(tmp.lastname));
+    if (lname.isEmpty()) return;
+    lname = QString::fromStdString(Validators::normalize_name(lname.toStdString()));
+    tmp.lastname = lname.toStdString();
+
+    QString fname = getValidName("FIRSTNAME", false, QString::fromStdString(tmp.firstname));
+    if (fname.isEmpty()) return;
+    fname = QString::fromStdString(Validators::normalize_name(fname.toStdString()));
+    tmp.firstname = fname.toStdString();
+
+    QString mname = getValidName("MIDDLENAME", true, QString::fromStdString(tmp.middlename));
+    if (mname.isNull()) return;
+    if (!mname.isEmpty())
+        mname = QString::fromStdString(Validators::normalize_name(mname.toStdString()));
+    tmp.middlename = mname.toStdString();
+
+    QString email = getValidEmail("EMAIL", QString::fromStdString(tmp.email));
+    if (email.isEmpty()) return;
+    tmp.email = email.toStdString();
+
+    QString bday = getValidBirthday("BIRTHDAY", QString::fromStdString(tmp.birthday));
+    if (bday.isEmpty()) return;
+    tmp.birthday = bday.toStdString();
+
+    QString addr = getValidAddress("ADDRESS", QString::fromStdString(tmp.address));
+    if (addr.isEmpty()) return;
+    tmp.address = addr.toStdString();
+
+    // PHONES а э редактируем существующие, даём возможность удалить/изменить/добавить новые
+    std::vector<PhoneNumber> newPhones;
+    // редактирование текущих
+    for (size_t i = 0; i < tmp.phones.size(); ++i) {
+        const PhoneNumber &ph = tmp.phones[i];
+        // спользуем диалог, чтобы предложить изменить лейбл 
+        bool ok;
+        QString label = QInputDialog::getText(this, "PHONE LABEL", QString("Edit label for phone #%1:").arg(i+1),
+                                              QLineEdit::Normal, QString::fromStdString(ph.label), &ok);
+        if (!ok) {
+            // если отмена даём возможность полностью отменить редактирование
+            QMessageBox::StandardButton res = QMessageBox::question(this, "Cancel editing","Cancel editing phones? This will abort whole edit.", QMessageBox::Yes | QMessageBox::No);
+            if (res == QMessageBox::Yes) return; // abort entire edit
+            // else продолжим
+            --i; // повтор
+            continue;
+        }
+        label = label.trimmed();
+        if (label.isEmpty()) {
+            // если пользователь стер label — предложим удалить этот номер
+            QMessageBox::StandardButton rb = QMessageBox::question(this, "Remove phone?",
+                                                                  "Label is empty — remove this phone?", QMessageBox::Yes | QMessageBox::No);
+            if (rb == QMessageBox::Yes) continue; // телефон удалён, не добавляем в newPhones
+            // иначе попросим повторить
+            --i; continue;
+        }
+
+        QString number = QInputDialog::getText(this, "PHONE NUMBER", QString("Edit number for phone #%1:").arg(i+1),
+                                               QLineEdit::Normal, QString::fromStdString(ph.number), &ok);
+        if (!ok) {
+            QMessageBox::StandardButton res = QMessageBox::question(this, "Cancel editing",
+                                                                    "Cancel editing phones? This will abort whole edit.", QMessageBox::Yes | QMessageBox::No);
+            if (res == QMessageBox::Yes) return;
+            --i; continue;
+        }
+        number = QString::fromStdString(Validators::normalize_phone(number.toStdString()));
+        if (!Validators::validphone(number.toStdString())) {
+            showErrorMsg(this, "Invalid phone number! Must start with +7 or 8 followed by 10 digits.");
+            --i; continue;
+        }
+        PhoneNumber np;
+        np.label = label.toStdString();
+        np.number = number.toStdString();
+        newPhones.push_back(np);
+    }
+
+    // возможность добавить новые номера
+    QMessageBox::StandardButton addMore = QMessageBox::question(this, "Add more phones", "Add more phone numbers?", QMessageBox::Yes | QMessageBox::No);
+    if (addMore == QMessageBox::Yes) {
+        while (true) {
+            bool ok;
+            QString label = QInputDialog::getText(this, "PHONE LABEL", "Enter phone label (home/work/etc):", QLineEdit::Normal, "", &ok);
+            if (!ok) break;
+            label = label.trimmed();
+            if (label.isEmpty()) continue;
+
+            QString number = QInputDialog::getText(this, "PHONE NUMBER", "Enter phone number (+7... or 8...):", QLineEdit::Normal, "", &ok);
+            if (!ok) break;
+            number = QString::fromStdString(Validators::normalize_phone(number.toStdString()));
+            if (!Validators::validphone(number.toStdString())) {
+                showErrorMsg(this, "Invalid phone number! Must start with +7 or 8 followed by 10 digits.");
+                continue;
+            }
+            PhoneNumber np;
+            np.label = label.toStdString();
+            np.number = number.toStdString();
+            newPhones.push_back(np);
+
+            QMessageBox::StandardButton more = QMessageBox::question(this, "More?", "Add another phone?", QMessageBox::Yes | QMessageBox::No);
+            if (more == QMessageBox::No) break;
+        }
+    }
+
+    // мин один номер
+    if (newPhones.empty()) {
+        showErrorMsg(this, "At least one phone number must remain. Edit cancelled.");
+        return;
+    }
+    tmp.phones = newPhones;
+
+    // если дошли сюда — все валидно. Копируем tmp в orig
+    orig = tmp;
+    refreshtable();
+    QMessageBox::information(this, "Success", "Contact edited successfully!");
+}
+
 void mainwindow::ondelete(){
     int row = table->currentRow();
     if (row < 0){
-        showError("Please select a contact to delete.");
+        showErrorMsg(this, "Please select a contact to delete.");
         return;
     }
     pb.removebyindex(row);
@@ -235,8 +435,11 @@ void mainwindow::ondelete(){
 }
 
 void mainwindow::onfind(){
-    QString q = searchfield->text();
-    if (q.isEmpty()) return;
+    QString q = searchfield->text().trimmed();
+    if (q.isEmpty()) {
+        showErrorMsg(this, "Please enter search text.");
+        return;
+    }
     auto res = pb.findbyname(q.toStdString());
 
     for (int i = 0; i < table->rowCount(); ++i)
@@ -245,7 +448,46 @@ void mainwindow::onfind(){
         table->setRowHidden(static_cast<int>(idx), false);
 }
 
+void mainwindow::onreset(){
+    searchfield->clear();
+    for (int i = 0; i < table->rowCount(); ++i)
+        table->setRowHidden(i, false);
+}
+
 void mainwindow::onsave(){
     pb.savetofile("phonebook.db");
-    QMessageBox::information(this, "Save", "All data saved to phonebook.db!");
+
+    if (pgdb.isOpen()) {
+        QSqlQuery q(pgdb);
+        q.exec("DELETE FROM phones");
+        q.exec("DELETE FROM contacts");
+
+        for (const auto &c : pb.getAll()) {
+            q.prepare(
+                "INSERT INTO contacts(lastname,firstname,middlename,birthday,email,address) "
+                "VALUES(?,?,?,?,?,?) RETURNING id");
+            q.addBindValue(QString::fromStdString(c.lastname));
+            q.addBindValue(QString::fromStdString(c.firstname));
+            q.addBindValue(QString::fromStdString(c.middlename));
+            q.addBindValue(QString::fromStdString(c.birthday));
+            q.addBindValue(QString::fromStdString(c.email));
+            q.addBindValue(QString::fromStdString(c.address));
+            q.exec();
+            q.next();
+            int cid = q.value(0).toInt();
+
+            for (const auto &p : c.phones) {
+                QSqlQuery qp(pgdb);
+                qp.prepare(
+                    "INSERT INTO phones(contact_id,label,number) VALUES(?,?,?)");
+                qp.addBindValue(cid);
+                qp.addBindValue(QString::fromStdString(p.label));
+                qp.addBindValue(QString::fromStdString(p.number));
+                qp.exec();
+            }
+        }
+    }
+
+    QMessageBox::information(this,"Save",
+        "Saved to phonebook.db and PostgreSQL successfully!");
 }
