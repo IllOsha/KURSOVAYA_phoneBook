@@ -1,7 +1,7 @@
 #include "contacts.h"
 #include <sstream>
 #include <utility>
-
+//пупупу
 std::atomic<size_t> contacts::created_count{0};
 std::atomic<size_t> contacts::copy_count{0};
 std::atomic<size_t> contacts::move_count{0};

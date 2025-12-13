@@ -8,5 +8,5 @@ class filestorage{
 public:
     explicit filestorage(std::string fn);// предотвращает неявное преобразования одного типа в другой
     std::vector <contacts> loadall();
-    void saveall(const std::vector<contacts>& data);// типо прочитай все файлы, а потом отдай в виде списка
+    void saveall(const std::vector<contacts>& data);// типо прочитай все файлы, а потом типо отдай в виде списка
 };
